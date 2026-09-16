@@ -1,0 +1,190 @@
+import requests
+import json
+import pandas as pd
+
+url = "https://api.gdc.cancer.gov/cases"
+
+filters= {
+    "op": "=",
+    "content": {
+        "field":"project.projrct_id",
+        "value":"TCGA_COAD"
+    }
+}
+
+params = {
+    "filters": json.dumps(filters),
+    "fields":",".join([
+        "submitter_id",
+        "primary_site",
+        "diagnoses.age_at_diagnosis",
+        "demographic.gender",
+        "diagnoses.ajcc_pathologic_stage",
+        "demographic.vital_status",
+        "diagnoses.days_to_death",
+        "diagnoses.days_to_last_follow_up"
+    ]),
+    "format":"JSON",
+    "size": 10000
+}
+
+response = requests.get(url , params=params)
+print(response.status_code)
+
+data = response.json()
+
+print(data.keys())
+print(data['data'].keys())
+print(data['data']['pagination'])
+
+cases = data['data']['hits']
+print(len(cases))
+print(cases[0])
+
+for case in cases[:5]:
+    print(case['submitter_id'])
+    print(case['diagnoses'])
+    print()
+
+def get_first_value(diagnoses,field):
+    for diagnosis in diagnoses:
+        value = diagnosis.get(field)
+        if value is not None:
+            return value
+    return None
+
+case = cases[0]
+print(get_first_value(case["diagnoses"], "age_at_diagnosis"))
+print(get_first_value(case["diagnoses"], "ajcc_pathologic_stage"))
+print(get_first_value(case["diagnoses"], "days_to_last_follow_up"))
+
+clinical_data = []
+for case in cases:
+    diagnosis = case['diagnoses']
+    row={
+        "submitter_id": case["submitter_id"],
+        "age_at_diagnosis": get_first_value(diagnosis, "age_at_diagnosis"),
+        "stage": get_first_value(diagnosis, "ajcc_pathologic_stage"),
+        "vital_status": case["demographic"].get("vital_status"),
+        "days_to_last_follow_up": get_first_value(
+            diagnosis, "days_to_last_follow_up"
+        )
+    }
+    clinical_data.append(row)
+
+df_clinical = pd.DataFrame(clinical_data)
+print(df_clinical.shape)
+print(df_clinical.head())
+
+df_clinical.info()
+df_clinical.isna().sum()
+
+df_clinical['vital_status'].value_counts(dropna=False)
+df_clinical['stage'].value_counts(dropna=False)
+
+df_clinical['age_at_diagnosis_years'] = (df_clinical['age_at_diagnosis']/365.25)
+df_clinical[[
+    "submitter_id",
+    "age_at_diagnosis",
+    "age_at_diagnosis_years"
+]].head()
+
+df_clinical.head()
+
+# import seaborn as sns
+import matplotlib.pyplot as plt
+
+# sns.histplot(data=df_clinical, x= 'age_at_diagnosis_years')
+# sns.countplot(data=df_clinical,x='stage')
+
+stage_map = {
+    "Stage I": "Stage I",
+    "Stage IA": "Stage I",
+    "Stage IIA": "Stage II",
+    "Stage IIB": "Stage II",
+    "Stage IIC": "Stage II",
+    "Stage II": "Stage II",
+    "Stage III": "Stage III",
+    "Stage IIIA": "Stage III",
+    "Stage IIIB": "Stage III",
+    "Stage IIIC": "Stage III",
+    "Stage IV": "Stage IV",
+    "Stage IVA": "Stage IV",
+    "Stage IVB": "Stage IV"
+}
+
+df_clinical["stage_main"] = df_clinical["stage"].map(stage_map)
+
+# sns.countplot(data=df_clinical,x='stage_main')
+
+df_clinical.head()
+
+params = {
+    "filters": json.dumps(filters),
+    "fields": ",".join([
+        "submitter_id",
+        "demographic.vital_status",
+        "demographic.days_to_death",
+        "diagnoses.days_to_last_follow_up"
+    ]),
+    "format": "JSON",
+    "size": 10000
+}
+
+response = requests.get(url, params=params)
+
+print(response.status_code)
+
+data = response.json()
+
+print(data.keys())
+
+cases = data["data"]["hits"]
+
+df_survival = pd.DataFrame(cases)
+
+df_survival.head()
+
+df_survival["vital_status"] = df_survival["demographic"].apply(
+    lambda x: x.get("vital_status") if isinstance(x, dict) else None
+)
+
+df_survival["days_to_death"] = df_survival["demographic"].apply(
+    lambda x: x.get("days_to_death") if isinstance(x, dict) else None
+)
+
+df_survival["days_to_last_follow_up"] = df_survival["diagnoses"].apply(
+    lambda x: x[0].get("days_to_last_follow_up")
+    if isinstance(x, list) and len(x) > 0
+    else None
+)
+df_survival
+
+
+df_survival["event"] = (df_survival["vital_status"] == "Dead").astype(int)
+df_survival["survival_days"] = df_survival["days_to_death"]
+
+df_survival.loc[df_survival["event"] == 0, "survival_days"] = (
+    df_survival.loc[df_survival["event"] == 0, "days_to_last_follow_up"]
+)
+df_survival.head()
+
+survival_subset = df_survival[
+    [
+        "submitter_id",
+        "days_to_death",
+        "event",
+        "survival_days"
+    ]
+]
+df = df_clinical.merge(
+    survival_subset,
+    on="submitter_id",
+    how="left"
+)
+df.head()
+
+df.info()
+df.isna().sum()
+
+df.to_csv('first_survival_dataset.csv', index=False)
