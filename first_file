@@ -1,9 +1,10 @@
+
 import requests
 import json
 import pandas as pd
-
+# 1. API Configuration & Clinical Data Retrieval
 url = "https://api.gdc.cancer.gov/cases"
-
+# Filter for TCGA Colon Adenocarcinoma (TCGA-COAD) project
 filters= {
     "op": "=",
     "content": {
@@ -11,7 +12,7 @@ filters= {
         "value":"TCGA_COAD"
     }
 }
-
+# Specify clinical fields to extract from the GDC API
 params = {
     "filters": json.dumps(filters),
     "fields":",".join([
@@ -45,7 +46,7 @@ for case in cases[:5]:
     print(case['submitter_id'])
     print(case['diagnoses'])
     print()
-
+# 2. Helper Function for Nested JSON Extraction
 def get_first_value(diagnoses,field):
     for diagnosis in diagnoses:
         value = diagnosis.get(field)
@@ -57,7 +58,7 @@ case = cases[0]
 print(get_first_value(case["diagnoses"], "age_at_diagnosis"))
 print(get_first_value(case["diagnoses"], "ajcc_pathologic_stage"))
 print(get_first_value(case["diagnoses"], "days_to_last_follow_up"))
-
+# 3. Build & Clean Clinical DataFrame
 clinical_data = []
 for case in cases:
     diagnosis = case['diagnoses']
@@ -81,7 +82,7 @@ df_clinical.isna().sum()
 
 df_clinical['vital_status'].value_counts(dropna=False)
 df_clinical['stage'].value_counts(dropna=False)
-
+# Convert age from days to years for easier interpretation
 df_clinical['age_at_diagnosis_years'] = (df_clinical['age_at_diagnosis']/365.25)
 df_clinical[[
     "submitter_id",
@@ -91,12 +92,12 @@ df_clinical[[
 
 df_clinical.head()
 
-# import seaborn as sns
+import seaborn as sns
 import matplotlib.pyplot as plt
 
-# sns.histplot(data=df_clinical, x= 'age_at_diagnosis_years')
-# sns.countplot(data=df_clinical,x='stage')
-
+sns.histplot(data=df_clinical, x= 'age_at_diagnosis_years')
+sns.countplot(data=df_clinical,x='stage')
+# 4. Standardize Cancer Stages
 stage_map = {
     "Stage I": "Stage I",
     "Stage IA": "Stage I",
@@ -115,11 +116,12 @@ stage_map = {
 
 df_clinical["stage_main"] = df_clinical["stage"].map(stage_map)
 
-# sns.countplot(data=df_clinical,x='stage_main')
+sns.countplot(data=df_clinical,x='stage_main')
 
 df_clinical.head()
-
-params = {
+# 5. Survival Data Retrieval & Formatting
+# Re-query GDC focusing specifically on follow-up and death timeline attributes
+survival_params = {
     "filters": json.dumps(filters),
     "fields": ",".join([
         "submitter_id",
@@ -131,20 +133,20 @@ params = {
     "size": 10000
 }
 
-response = requests.get(url, params=params)
+survival_response = requests.get(url, params=survival_params)
 
-print(response.status_code)
+print(survival_response.status_code)
 
-data = response.json()
+survival_data = survival_response.json()
 
-print(data.keys())
+print(survival_data.keys())
 
-cases = data["data"]["hits"]
+survival_cases = survival_data["data"]["hits"]
 
-df_survival = pd.DataFrame(cases)
+df_survival = pd.DataFrame(survival_cases)
 
 df_survival.head()
-
+# Safely extract nested demographic and clinical survival metrics using lambda
 df_survival["vital_status"] = df_survival["demographic"].apply(
     lambda x: x.get("vital_status") if isinstance(x, dict) else None
 )
@@ -159,7 +161,6 @@ df_survival["days_to_last_follow_up"] = df_survival["diagnoses"].apply(
     else None
 )
 df_survival
-
 
 df_survival["event"] = (df_survival["vital_status"] == "Dead").astype(int)
 df_survival["survival_days"] = df_survival["days_to_death"]
@@ -177,14 +178,13 @@ survival_subset = df_survival[
         "survival_days"
     ]
 ]
+# 6. Merge Datasets & Export
 df = df_clinical.merge(
     survival_subset,
     on="submitter_id",
     how="left"
 )
 df.head()
-
 df.info()
 df.isna().sum()
-
 df.to_csv('first_survival_dataset.csv', index=False)
